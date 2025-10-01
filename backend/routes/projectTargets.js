@@ -3,6 +3,34 @@ const { v4: uuidv4 } = require('uuid');
 const { db } = require('../db');
 const router = express.Router();
 
+// POST /api/project-targets - bulk add target channels to project
+router.post('/', (req, res) => {
+  const { project_id, channel_ids } = req.body;
+  
+  if (!project_id || !channel_ids || !Array.isArray(channel_ids)) {
+    return res.status(400).json({ success: false, error: 'Project ID and channel IDs array are required' });
+  }
+  
+  if (channel_ids.length === 0) {
+    return res.json({ success: true, data: [] });
+  }
+  
+  const insertPromises = channel_ids.map(channel_id => {
+    return new Promise((resolve, reject) => {
+      const target_id = uuidv4();
+      const sql = 'INSERT INTO project_targets (id, project_id, channel_id, priority) VALUES (?, ?, ?, ?)';
+      db.run(sql, [target_id, project_id, channel_id, 0], function(err) {
+        if (err) reject(err);
+        else resolve({ id: target_id, project_id, channel_id });
+      });
+    });
+  });
+  
+  Promise.all(insertPromises)
+    .then(results => res.status(201).json({ success: true, data: results }))
+    .catch(err => res.status(500).json({ success: false, error: err.message }));
+});
+
 // POST /api/projects/:id/targets - add target channel to project
 router.post('/:id/targets', (req, res) => {
   const { id } = req.params; // project id

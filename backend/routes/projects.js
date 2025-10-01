@@ -43,6 +43,51 @@ router.get('/', (req, res) => {
   });
 });
 
+// GET /api/projects/:id - get single project
+router.get('/:id', (req, res) => {
+  const { id } = req.params;
+  const sql = 'SELECT id, name, description, owner, status, config, created_at, updated_at FROM projects WHERE id = ?';
+  db.get(sql, [id], (err, row) => {
+    if (err) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+    if (!row) {
+      return res.status(404).json({ success: false, error: 'Project not found' });
+    }
+    res.json({ success: true, data: row });
+  });
+});
+
+// PUT /api/projects/:id - update project
+router.put('/:id', (req, res) => {
+  const { id } = req.params;
+  const { name, description, owner, config } = req.body;
+  
+  if (!name) {
+    return res.status(400).json({ success: false, error: 'Project name is required' });
+  }
+  
+  const sql = 'UPDATE projects SET name = ?, description = ?, owner = ?, config = ?, updated_at = datetime("now") WHERE id = ?';
+  db.run(sql, [name, description, owner, JSON.stringify(config || {}), id], function(err) {
+    if (err) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+    if (this.changes === 0) {
+      return res.status(404).json({ success: false, error: 'Project not found' });
+    }
+    res.json({ 
+      success: true, 
+      data: { 
+        id, 
+        name, 
+        description, 
+        owner, 
+        config: config || {} 
+      } 
+    });
+  });
+});
+
 // POST /api/projects/:id/run - enqueue and start
 router.post('/:id/run', async (req, res) => {
   const { id } = req.params;
@@ -88,37 +133,76 @@ router.post('/:id/run', async (req, res) => {
             }
             
             // Get project messages
-            const messagesSql = 'SELECT id FROM project_messages WHERE project_id = ?';
+            const messagesSql = 'SELECT id, message_type FROM project_messages WHERE project_id = ?';
             db.all(messagesSql, [id], async (messagesErr, messages) => {
               if (messagesErr) {
                 return res.status(500).json({ success: false, error: messagesErr.message });
               }
               
-              // For each target, for each message, create a job with available sessions
+              // New logic: 1 session, sequential per channel
               let jobCount = 0;
+              
+              if (sessions.length === 0) {
+                return res.status(400).json({ success: false, error: 'No sessions found for this project' });
+              }
+              
+              const sessionId = sessions[0].session_id; // Always use first (and only) session
+              
+              // Determine message structure: text only, media only, or media + caption
+              let textMessage = null;
+              let mediaMessage = null;
+              
+              for (const msg of messages) {
+                if (msg.message_type === 'text') {
+                  textMessage = msg;
+                } else if (msg.message_type === 'photo' || msg.message_type === 'video') {
+                  mediaMessage = msg;
+                }
+              }
+              
+              // Process each channel sequentially with incremental delays
+              let jobIndex = 0;
               for (const target of targets) {
-                for (const message of messages) {
-                  // Select a session based on selection mode
-                  const selectedSessionId = sessions.length > 0 
-                    ? selection_mode === 'random' 
-                      ? sessions[Math.floor(Math.random() * sessions.length)].session_id
-                      : sessions[0].session_id
-                    : null;
-                  
-                  if (selectedSessionId) {
-                    try {
-                      await addSendMessageJob(
-                        runId, 
-                        id, 
-                        target.channel_id, 
-                        selectedSessionId, 
-                        message.id
-                      );
-                      jobCount++;
-                    } catch (jobErr) {
-                      console.error('Error adding job to queue:', jobErr);
-                    }
+                try {
+                  if (mediaMessage && textMessage) {
+                    // Media with caption from text file
+                    await addSendMessageJob(
+                      runId, 
+                      id, 
+                      target.channel_id, 
+                      sessionId, 
+                      mediaMessage.id,
+                      { caption_message_id: textMessage.id, job_index: jobIndex }
+                    );
+                    jobCount++;
+                    jobIndex++;
+                  } else if (mediaMessage) {
+                    // Media only (no caption)
+                    await addSendMessageJob(
+                      runId, 
+                      id, 
+                      target.channel_id, 
+                      sessionId, 
+                      mediaMessage.id,
+                      { job_index: jobIndex }
+                    );
+                    jobCount++;
+                    jobIndex++;
+                  } else if (textMessage) {
+                    // Text only
+                    await addSendMessageJob(
+                      runId, 
+                      id, 
+                      target.channel_id, 
+                      sessionId, 
+                      textMessage.id,
+                      { job_index: jobIndex }
+                    );
+                    jobCount++;
+                    jobIndex++;
                   }
+                } catch (jobErr) {
+                  console.error('Error adding job to queue:', jobErr);
                 }
               }
               

@@ -201,19 +201,110 @@ router.put('/:id/update_data', async (req, res) => {
 });
 
 
-// DELETE /api/sessions/:id - delete session
+// DELETE /api/sessions/:id - delete session with smart project handling
 router.delete('/:id', (req, res) => {
   const { id } = req.params;
   
-  const sql = 'DELETE FROM sessions WHERE id = ?';
-  db.run(sql, [id], function(err) {
+  // Check if session exists
+  const checkSql = 'SELECT id, first_name, last_name FROM sessions WHERE id = ?';
+  db.get(checkSql, [id], (err, session) => {
     if (err) {
       return res.status(500).json({ success: false, error: err.message });
     }
-    if (this.changes === 0) {
+    if (!session) {
       return res.status(404).json({ success: false, error: 'Session not found' });
     }
-    res.json({ success: true, message: 'Session deleted successfully' });
+
+    // Find projects using this session
+    const findProjectsSql = `
+      SELECT ps.project_id, ps.selection_mode, p.name
+      FROM project_sessions ps
+      JOIN projects p ON ps.project_id = p.id
+      WHERE ps.session_id = ?
+    `;
+    db.all(findProjectsSql, [id], (projErr, projectRefs) => {
+      if (projErr) {
+        return res.status(500).json({ success: false, error: projErr.message });
+      }
+
+      const projectsToDelete = [];
+      const projectsToReplace = [];
+
+      // Process each affected project
+      const processProjects = () => {
+        if (projectRefs.length === 0) {
+          deleteSession();
+          return;
+        }
+
+        let processed = 0;
+        projectRefs.forEach(proj => {
+          if (proj.selection_mode === 'random') {
+            // Random mode: try to replace with another session
+            const getOtherSessionsSql = 'SELECT id FROM sessions WHERE id != ? LIMIT 1';
+            db.get(getOtherSessionsSql, [id], (sessErr, otherSession) => {
+              if (!sessErr && otherSession) {
+                // Replace with another session
+                const updateSql = 'UPDATE project_sessions SET session_id = ? WHERE project_id = ? AND session_id = ?';
+                db.run(updateSql, [otherSession.id, proj.project_id, id], () => {
+                  projectsToReplace.push(proj.name);
+                });
+              } else {
+                // No other sessions available, delete project
+                projectsToDelete.push(proj.name);
+                db.run('DELETE FROM projects WHERE id = ?', [proj.project_id]);
+              }
+              processed++;
+              if (processed === projectRefs.length) {
+                setTimeout(deleteSession, 100);
+              }
+            });
+          } else {
+            // Manual mode: delete project
+            projectsToDelete.push(proj.name);
+            db.run('DELETE FROM projects WHERE id = ?', [proj.project_id], () => {
+              processed++;
+              if (processed === projectRefs.length) {
+                setTimeout(deleteSession, 100);
+              }
+            });
+          }
+        });
+      };
+
+      const deleteSession = () => {
+        // Delete from project_sessions
+        const deleteProjectSessionsSql = 'DELETE FROM project_sessions WHERE session_id = ?';
+        db.run(deleteProjectSessionsSql, [id], (psErr) => {
+          if (psErr) {
+            console.error('Error deleting project_sessions:', psErr);
+          }
+
+          // Delete session
+          const deleteSql = 'DELETE FROM sessions WHERE id = ?';
+          db.run(deleteSql, [id], function(delErr) {
+            if (delErr) {
+              return res.status(500).json({ success: false, error: delErr.message });
+            }
+
+            const sessionName = `${session.first_name || ''} ${session.last_name || ''}`.trim() || 'Unknown';
+            res.json({ 
+              success: true,
+              message: `Session "${sessionName}" deleted successfully`,
+              details: {
+                projects_affected: projectRefs.length,
+                projects_deleted: projectsToDelete.length,
+                projects_replaced: projectsToReplace.length,
+                deleted_projects: projectsToDelete,
+                replaced_projects: projectsToReplace
+              }
+            });
+          });
+        });
+      };
+
+      processProjects();
+    });
   });
 });
 

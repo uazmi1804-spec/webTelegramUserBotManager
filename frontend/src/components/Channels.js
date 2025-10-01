@@ -39,9 +39,11 @@ function Channels() {
     fetchCategories();
   }, []);
 
-  const fetchChannels = async () => {
+  const fetchChannels = async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) {
+        setLoading(true);
+      }
       const response = await axios.get('/api/channels');
       if (response.data.success) {
         setChannels(response.data.data);
@@ -49,7 +51,9 @@ function Channels() {
     } catch (error) {
       setError('Failed to fetch channels: ' + error.message);
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   };
 
@@ -83,7 +87,7 @@ function Channels() {
       if (response.data.success) {
         setSuccess('Channel added successfully');
         setNewUsername('');
-        fetchChannels();
+        fetchChannels(true); // Silent refresh, no loading screen
         handleCloseAddChannelModal();
       }
     } catch (error) {

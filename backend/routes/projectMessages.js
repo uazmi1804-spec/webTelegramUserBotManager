@@ -3,6 +3,47 @@ const { v4: uuidv4 } = require('uuid');
 const { db } = require('../db');
 const router = express.Router();
 
+// POST /api/project-messages - add message to project (with file_id)
+router.post('/', (req, res) => {
+  const { project_id, file_id } = req.body;
+  const message_id = uuidv4();
+  
+  if (!project_id || !file_id) {
+    return res.status(400).json({ success: false, error: 'Project ID and file ID are required' });
+  }
+  
+  // Get file info to determine message type
+  const getFileSql = 'SELECT file_type, filename FROM files WHERE id = ?';
+  db.get(getFileSql, [file_id], (err, file) => {
+    if (err) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+    if (!file) {
+      return res.status(404).json({ success: false, error: 'File not found' });
+    }
+    
+    const message_type = file.file_type; // 'text', 'photo', 'video', etc.
+    const content_ref = file_id;
+    
+    const sql = 'INSERT INTO project_messages (id, project_id, message_type, content_ref, caption) VALUES (?, ?, ?, ?, ?)';
+    db.run(sql, [message_id, project_id, message_type, content_ref, null], function(insertErr) {
+      if (insertErr) {
+        return res.status(500).json({ success: false, error: insertErr.message });
+      }
+      res.status(201).json({ 
+        success: true, 
+        data: { 
+          id: message_id, 
+          project_id, 
+          message_type, 
+          content_ref,
+          file_id
+        } 
+      });
+    });
+  });
+});
+
 // POST /api/projects/:id/messages - add message to project
 router.post('/:id/messages', (req, res) => {
   const { id } = req.params; // project id

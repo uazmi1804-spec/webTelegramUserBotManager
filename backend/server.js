@@ -35,6 +35,10 @@ app.use('/api/projects', projectTargetsRoutes);
 app.use('/api/projects', projectSessionsRoutes);
 app.use('/api/projects', projectMessagesRoutes);
 app.use('/api/projects', delaysRoutes);
+// Bulk endpoints
+app.use('/api/project-sessions', projectSessionsRoutes);
+app.use('/api/project-targets', projectTargetsRoutes);
+app.use('/api/project-messages', projectMessagesRoutes);
 app.use('/internal', internalRoutes);
 
 // Health check endpoint

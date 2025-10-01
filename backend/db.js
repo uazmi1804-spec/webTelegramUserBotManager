@@ -90,7 +90,8 @@ const initDB = () => {
       project_id TEXT,
       channel_id TEXT,
       priority INTEGER,
-      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
     )`);
 
     // Project Sessions table

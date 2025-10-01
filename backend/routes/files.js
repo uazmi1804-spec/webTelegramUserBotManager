@@ -228,38 +228,89 @@ router.post('/text', (req, res) => {
   }
 });
 
-// DELETE /api/files/:id - delete a file (disk + DB)
+// DELETE /api/files/:id - delete a file (disk + DB + cleanup projects)
 router.delete('/:id', (req, res) => {
   const { id } = req.params;
   const fs = require('fs');
 
-  // First fetch the file record to get its path
-  const selectSql = 'SELECT path FROM files WHERE id = ?';
-  db.get(selectSql, [id], (selectErr, row) => {
+  // First fetch the file record
+  const selectSql = 'SELECT id, filename, path FROM files WHERE id = ?';
+  db.get(selectSql, [id], (selectErr, file) => {
     if (selectErr) {
       return res.status(500).json({ success: false, error: selectErr.message });
     }
-    if (!row) {
+    if (!file) {
       return res.status(404).json({ success: false, error: 'File not found' });
     }
 
-    // Try delete the file from disk (ignore if already missing)
-    try {
-      if (row.path && fs.existsSync(row.path)) {
-        fs.unlinkSync(row.path);
+    // Find projects using this file
+    const findProjectsSql = 'SELECT DISTINCT project_id FROM project_messages WHERE content_ref = ?';
+    db.all(findProjectsSql, [id], (projErr, projectRefs) => {
+      if (projErr) {
+        return res.status(500).json({ success: false, error: projErr.message });
       }
-    } catch (fsErr) {
-      // If file deletion fails due to permissions or other IO, report error
-      return res.status(500).json({ success: false, error: 'Failed to remove file from disk: ' + fsErr.message });
-    }
 
-    // Remove DB record
-    const deleteSql = 'DELETE FROM files WHERE id = ?';
-    db.run(deleteSql, [id], function(dbErr) {
-      if (dbErr) {
-        return res.status(500).json({ success: false, error: dbErr.message });
-      }
-      return res.json({ success: true });
+      // Delete project_messages using this file
+      const deleteMessagesSql = 'DELETE FROM project_messages WHERE content_ref = ?';
+      db.run(deleteMessagesSql, [id], (msgErr) => {
+        if (msgErr) {
+          console.error('Error deleting project_messages:', msgErr);
+        }
+
+        // Check and delete projects with no messages left
+        const projectIds = projectRefs.map(p => p.project_id);
+        const deletedProjects = [];
+        
+        const checkProjects = () => {
+          if (projectIds.length === 0) {
+            deleteFileFromDisk();
+            return;
+          }
+          
+          let checked = 0;
+          projectIds.forEach(projectId => {
+            const countSql = 'SELECT COUNT(*) as count FROM project_messages WHERE project_id = ?';
+            db.get(countSql, [projectId], (err, result) => {
+              if (!err && result.count === 0) {
+                db.run('DELETE FROM projects WHERE id = ?', [projectId], () => {
+                  deletedProjects.push(projectId);
+                });
+              }
+              checked++;
+              if (checked === projectIds.length) {
+                setTimeout(deleteFileFromDisk, 100);
+              }
+            });
+          });
+        };
+
+        const deleteFileFromDisk = () => {
+          try {
+            if (file.path && fs.existsSync(file.path)) {
+              fs.unlinkSync(file.path);
+            }
+          } catch (fsErr) {
+            return res.status(500).json({ success: false, error: 'Failed to remove file: ' + fsErr.message });
+          }
+
+          const deleteSql = 'DELETE FROM files WHERE id = ?';
+          db.run(deleteSql, [id], function(dbErr) {
+            if (dbErr) {
+              return res.status(500).json({ success: false, error: dbErr.message });
+            }
+            res.json({ 
+              success: true,
+              message: `File "${file.filename}" deleted successfully`,
+              details: {
+                projects_affected: projectIds.length,
+                projects_deleted: deletedProjects.length
+              }
+            });
+          });
+        };
+
+        checkProjects();
+      });
     });
   });
 });

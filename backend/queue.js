@@ -144,6 +144,39 @@ const addSendMessageJob = async (run_id, project_id, target_channel_id, session_
     });
   });
   
+  // Get caption from text file if caption_message_id is provided
+  let caption = message.caption;
+  if (options.caption_message_id) {
+    const captionMessageSql = 'SELECT content_ref FROM project_messages WHERE id = ?';
+    const captionMessage = await new Promise((resolve, reject) => {
+      db.get(captionMessageSql, [options.caption_message_id], (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      });
+    });
+    
+    // Read text file content for caption
+    if (captionMessage && captionMessage.content_ref) {
+      const fs = require('fs');
+      const path = require('path');
+      const captionFileSql = 'SELECT path FROM files WHERE id = ?';
+      const captionFile = await new Promise((resolve, reject) => {
+        db.get(captionFileSql, [captionMessage.content_ref], (err, row) => {
+          if (err) reject(err);
+          else resolve(row);
+        });
+      });
+      
+      if (captionFile && captionFile.path) {
+        try {
+          caption = fs.readFileSync(captionFile.path, 'utf8');
+        } catch (err) {
+          console.error('Error reading caption file:', err);
+        }
+      }
+    }
+  }
+  
   // Get file details if this is a media message
   let file_path = null;
   if (message.message_type !== 'text') {
@@ -155,6 +188,25 @@ const addSendMessageJob = async (run_id, project_id, target_channel_id, session_
       });
     });
     file_path = file.path;
+  } else {
+    // For text messages, read the content from file
+    const fileSql = 'SELECT path FROM files WHERE id = ?';
+    const file = await new Promise((resolve, reject) => {
+      db.get(fileSql, [message.content_ref], (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      });
+    });
+    
+    if (file && file.path) {
+      const fs = require('fs');
+      try {
+        // Read text content and store in caption field for text messages
+        caption = fs.readFileSync(file.path, 'utf8');
+      } catch (err) {
+        console.error('Error reading text file:', err);
+      }
+    }
   }
   
   // Get channel details
@@ -193,12 +245,17 @@ const addSendMessageJob = async (run_id, project_id, target_channel_id, session_
     chat_id: channel.chat_id,
     type: message.message_type,
     file_path,
-    caption: message.caption,
+    caption: caption,  // Use the caption we prepared (from text file or original)
     ...options
   };
   
+  // Use job_index from options to create sequential delays
+  const jobDelay = options.job_index 
+    ? delay.delay_between_channels_ms * options.job_index 
+    : delay.delay_between_channels_ms;
+  
   const job = await sendQueue.add('send message', jobData, {
-    delay: delay.delay_between_channels_ms,  // Delay before processing
+    delay: jobDelay,  // Sequential delay based on job index
     attempts: 3,  // Retry up to 3 times
     backoff: {
       type: 'exponential',
