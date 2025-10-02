@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/env bash
 set -euo pipefail
 
-# Skrip setup Redis di Termux (minimal config, supress ARM64 COW warning)
+# Skrip setup Redis di Termux (minimal config, suppress ARM64 COW warning)
 # Update & upgrade paket
 pkg update -y && pkg upgrade -y
 
@@ -27,13 +27,13 @@ cat > "$REDIS_CONF" <<'EOF'
 port 6379
 daemonize yes
 protected-mode no
-save ""               # non-aktifkan RDB snapshot (opsional)
+save                  # non-aktifkan RDB snapshot (opsional)
 appendonly no         # non-aktifkan AOF (opsional)
 dir /data/data/com.termux/files/home
 logfile /data/data/com.termux/files/home/redis.log
 pidfile /data/data/com.termux/files/home/redis.pid
 
-# Supress known ARM64 COW kernel warning (gunakan jika kamu memahami risikonya)
+# Suppress known ARM64 COW kernel warning (gunakan jika kamu memahami risikonya)
 ignore-warnings ARM64-COW-BUG
 EOF
 
