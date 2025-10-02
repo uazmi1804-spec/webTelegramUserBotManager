@@ -156,6 +156,9 @@ fi
 source venv/bin/activate
 pip install -r requirements.txt
 deactivate
+
+# Make start.sh executable
+chmod +x start.sh
 cd ..
 
 # Create .env file if it doesn't exist
@@ -175,7 +178,11 @@ PORT=3000
 NODE_ENV=development
 
 # Python Service Configuration
-PYTHON_SERVICE_URL=http://localhost:8000
+PYTHON_SERVICE_URL=http://localhost:5000
+
+# Telegram API Configuration (Get from https://my.telegram.org)
+TELEGRAM_API_ID=your_api_id_here
+TELEGRAM_API_HASH=your_api_hash_here
 
 # JWT Configuration
 JWT_SECRET=your-super-secret-jwt-key-change-this-in-production
@@ -203,13 +210,23 @@ fi
 echo ""
 echo "🎉 Setup completed successfully!"
 echo ""
+echo "⚠️  IMPORTANT: Before starting the application:"
+echo "   1. Get Telegram API credentials from https://my.telegram.org"
+echo "   2. Edit .env file and update:"
+echo "      - TELEGRAM_API_ID"
+echo "      - TELEGRAM_API_HASH"
+echo ""
 echo "To start the application:"
 echo "  npm run dev"
 echo ""
 echo "This will start:"
 echo "  - Frontend: http://localhost:3001"
 echo "  - Backend: http://localhost:3000"
-echo "  - Python Service: http://localhost:8000"
+echo "  - Python Service: http://localhost:5000"
+echo ""
+echo "Access the application at: http://localhost:3001"
 echo ""
 echo "To stop Redis:"
 echo "  redis-cli shutdown"
+echo ""
+echo "For more information, see README.md"
