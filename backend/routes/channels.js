@@ -107,13 +107,29 @@ router.post('/bulk', (req, res) => {
 
 // GET /api/channels - get all channels
 router.get('/', (req, res) => {
-  const sql = 'SELECT id, username FROM channels ORDER BY id';
+  const sql = 'SELECT id, username, chat_id, name FROM channels ORDER BY id';
   
   db.all(sql, [], (err, rows) => {
     if (err) {
       return res.status(500).json({ success: false, error: err.message });
     }
     res.json({ success: true, data: rows });
+  });
+});
+
+// GET /api/channels/:id - get single channel
+router.get('/:id', (req, res) => {
+  const { id } = req.params;
+  const sql = 'SELECT id, username, chat_id, name FROM channels WHERE id = ?';
+  
+  db.get(sql, [id], (err, row) => {
+    if (err) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+    if (!row) {
+      return res.status(404).json({ success: false, error: 'Channel not found' });
+    }
+    res.json({ success: true, data: row });
   });
 });
 

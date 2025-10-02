@@ -40,6 +40,8 @@ const initDB = () => {
     // Channels table
     db.run(`CREATE TABLE IF NOT EXISTS channels (
       id TEXT PRIMARY KEY,
+      name TEXT,
+      chat_id TEXT,
       username TEXT,
       created_at DATETIME DEFAULT (datetime('now'))
     )`);
@@ -128,27 +130,24 @@ const initDB = () => {
       project_id TEXT,
       delay_between_channels_ms INTEGER,
       delay_between_sessions_ms INTEGER,
-      jitter_min_ms INTEGER,
       jitter_max_ms INTEGER
     )`);
 
     // Logs table
     db.run(`CREATE TABLE IF NOT EXISTS logs (
-      id TEXT PRIMARY KEY,
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
       run_id TEXT,
       level TEXT,
       message TEXT,
       meta TEXT,
-      created_at DATETIME DEFAULT (datetime('now'))
+      created_at DATETIME DEFAULT (datetime('now', 'localtime'))
     )`);
   });
 
   // Best-effort migrations: add columns if they don't exist
   const ensureColumn = (table, column, type) => {
-    db.get(`PRAGMA table_info(${table})`, [], (err) => {
-      // PRAGMA read not used; we will try add column and ignore errors if exists
-      db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`, [], () => {});
-    });
+    // PRAGMA read not used; we will try add column and ignore errors if exists
+    db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`, [], () => {});
   };
 
   ensureColumn('sessions', 'tg_id', 'INTEGER');
@@ -157,6 +156,13 @@ const initDB = () => {
   ensureColumn('sessions', 'username', 'TEXT');
   ensureColumn('sessions', 'phone_number', 'TEXT');
   ensureColumn('sessions', 'login_at', "DATETIME DEFAULT (datetime('now'))");
+  
+  // Ensure channels table has required columns
+  ensureColumn('channels', 'name', 'TEXT');
+  ensureColumn('channels', 'chat_id', 'TEXT');
+  
+  // Add missing id column to logs if needed
+  ensureColumn('logs', 'id', 'TEXT');
 
   console.log('Database initialized successfully');
 };

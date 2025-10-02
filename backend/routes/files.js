@@ -67,6 +67,23 @@ router.post('/', upload.single('file'), (req, res) => {
   });
 });
 
+// GET /api/files/:id/info - get file metadata (JSON)
+router.get('/:id/info', (req, res) => {
+  const { id } = req.params;
+  
+  const sql = 'SELECT id, filename, file_type, path, size, owner, created_at FROM files WHERE id = ?';
+  db.get(sql, [id], (err, row) => {
+    if (err) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+    if (!row) {
+      return res.status(404).json({ success: false, error: 'File not found' });
+    }
+    
+    res.json({ success: true, data: row });
+  });
+});
+
 // GET /api/files/:id - download
 router.get('/:id', (req, res) => {
   const { id } = req.params;

@@ -1,22 +1,78 @@
 const { Queue, Worker, Job } = require('bullmq');
-const Redis = require('redis');
 const { db } = require('./db');
 const axios = require('axios');
+const IORedis = require('ioredis');
 
-// Initialize Redis connection
-const redisConnection = Redis.createClient({
+// Helper function to check if all jobs are complete and update project status
+const checkAndUpdateProjectStatus = async (run_id, project_id) => {
+  return new Promise((resolve, reject) => {
+    // Get current stats
+    const getStatsSql = 'SELECT stats FROM process_runs WHERE id = ?';
+    db.get(getStatsSql, [run_id], (err, row) => {
+      if (err) {
+        console.error('Error getting stats:', err);
+        return reject(err);
+      }
+      
+      if (!row || !row.stats) {
+        return resolve(false);
+      }
+      
+      const stats = JSON.parse(row.stats);
+      const totalJobs = stats.total_jobs || 0;
+      const completedJobs = stats.completed_jobs || 0;
+      
+      console.log(`[Status Check] Run ${run_id}: ${completedJobs}/${totalJobs} jobs completed`);
+      
+      // Check if all jobs are complete
+      if (totalJobs > 0 && completedJobs >= totalJobs) {
+        console.log(`[Status Check] All jobs completed for run ${run_id}. Stopping project ${project_id}...`);
+        
+        // Update project status to stopped
+        const updateProjectSql = 'UPDATE projects SET status = ? WHERE id = ?';
+        db.run(updateProjectSql, ['stopped', project_id], (projectErr) => {
+          if (projectErr) {
+            console.error('Error updating project status:', projectErr);
+            return reject(projectErr);
+          }
+          
+          // Update process run status to completed
+          const updateRunSql = 'UPDATE process_runs SET status = ?, updated_at = datetime("now") WHERE id = ?';
+          db.run(updateRunSql, ['completed', run_id], (runErr) => {
+            if (runErr) {
+              console.error('Error updating run status:', runErr);
+              return reject(runErr);
+            }
+            
+            console.log(`[Status Check] ✅ Project ${project_id} stopped successfully`);
+            resolve(true);
+          });
+        });
+      } else {
+        resolve(false);
+      }
+    });
+  });
+};
+
+// BullMQ connection configuration (uses ioredis internally)
+const redisConnection = {
   host: process.env.REDIS_HOST || '127.0.0.1',
   port: process.env.REDIS_PORT || 6379,
   password: process.env.REDIS_PASSWORD || undefined,
+};
+
+console.log('Redis connection config:', redisConnection);
+
+// Create a separate ioredis client for lock management
+const redisClient = new IORedis(redisConnection);
+
+redisClient.on('error', (err) => {
+  console.error('Redis client error:', err);
 });
 
-// Handle Redis connection errors
-redisConnection.on('error', (err) => {
-  console.error('Redis connection error:', err);
-});
-
-redisConnection.on('connect', () => {
-  console.log('Connected to Redis');
+redisClient.on('connect', () => {
+  console.log('Redis client connected for lock management');
 });
 
 // Create queues for different types of jobs
@@ -26,25 +82,31 @@ const sendQueue = new Queue('send message', { connection: redisConnection });
 const worker = new Worker('send message', async (job) => {
   const { session_string, chat_id, type, file_path, caption, reply_to_message_id, run_id } = job.data;
   
+  console.log(`[Worker] Processing job ${job.id} for chat ${chat_id}`);
+  
   // Acquire lock for the session to prevent concurrent usage
   const lockKey = `session_lock:${job.data.session_id}`;
   const lockValue = `worker_${process.pid}_${Date.now()}`;
   const lockTimeout = 300000; // 5 minutes
   
   // Try to acquire the lock
-  const lockAcquired = await redisConnection.set(
+  const lockAcquired = await redisClient.set(
     lockKey, 
     lockValue, 
-    { NX: true, PX: lockTimeout }
+    'PX', lockTimeout,
+    'NX'
   );
   
   if (!lockAcquired) {
+    console.log(`[Worker] Session ${job.data.session_id} is locked by another process`);
     throw new Error(`Session ${job.data.session_id} is locked by another process`);
   }
   
   try {
     // Call the Python service to send the message
-    const response = await axios.post(`${process.env.PYTHON_SERVICE_URL}/send_message`, {
+    const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8000';
+    console.log(`[Worker] Calling Python service at ${PYTHON_SERVICE_URL}/send_message`);
+    const response = await axios.post(`${PYTHON_SERVICE_URL}/send_message`, {
       session_string,
       chat_id,
       message_type: type,
@@ -66,7 +128,7 @@ const worker = new Worker('send message', async (job) => {
       });
     });
     
-    // Update the process run stats
+    // Update the process run stats (success count only, completed will be tracked by events)
     const updateStatsSql = `
       UPDATE process_runs 
       SET stats = json_set(
@@ -94,7 +156,7 @@ const worker = new Worker('send message', async (job) => {
     
     return response.data;
   } catch (error) {
-    // Update the process run stats for failure
+    // Update the process run stats for failure (error count only)
     const updateStatsSql = `
       UPDATE process_runs 
       SET stats = json_set(
@@ -123,9 +185,9 @@ const worker = new Worker('send message', async (job) => {
     throw error; // This will trigger retries
   } finally {
     // Release the lock
-    const currentLockValue = await redisConnection.get(lockKey);
+    const currentLockValue = await redisClient.get(lockKey);
     if (currentLockValue === lockValue) {
-      await redisConnection.del(lockKey);
+      await redisClient.del(lockKey);
     }
   }
 }, { 
@@ -218,6 +280,10 @@ const addSendMessageJob = async (run_id, project_id, target_channel_id, session_
     });
   });
   
+  if (!channel || !channel.chat_id) {
+    throw new Error(`Channel not found or has no chat_id for target_channel_id: ${target_channel_id}`);
+  }
+  
   // Get session details
   const sessionSql = 'SELECT session_string FROM sessions WHERE id = ?';
   const session = await new Promise((resolve, reject) => {
@@ -226,6 +292,10 @@ const addSendMessageJob = async (run_id, project_id, target_channel_id, session_
       else resolve(row);
     });
   });
+  
+  if (!session || !session.session_string) {
+    throw new Error(`Session not found or has no session_string for session_id: ${session_id}`);
+  }
   
   // Get delay configuration
   const delaySql = 'SELECT delay_between_channels_ms FROM delays WHERE project_id = ?';
@@ -249,6 +319,8 @@ const addSendMessageJob = async (run_id, project_id, target_channel_id, session_
     ...options
   };
   
+  console.log(`[Queue] Adding job for channel ${channel.chat_id}, message type: ${message.message_type}`);
+  
   // Use job_index from options to create sequential delays
   const jobDelay = options.job_index 
     ? delay.delay_between_channels_ms * options.job_index 
@@ -270,5 +342,6 @@ module.exports = {
   sendQueue,
   worker,
   addSendMessageJob,
-  redisConnection
+  redisClient,
+  checkAndUpdateProjectStatus
 };

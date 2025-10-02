@@ -8,7 +8,10 @@ router.post('/', (req, res) => {
   const { project_id, file_id } = req.body;
   const message_id = uuidv4();
   
+  console.log('[Project Messages] Adding message:', { project_id, file_id });
+  
   if (!project_id || !file_id) {
+    console.error('[Project Messages] Missing required fields');
     return res.status(400).json({ success: false, error: 'Project ID and file ID are required' });
   }
   
@@ -28,8 +31,10 @@ router.post('/', (req, res) => {
     const sql = 'INSERT INTO project_messages (id, project_id, message_type, content_ref, caption) VALUES (?, ?, ?, ?, ?)';
     db.run(sql, [message_id, project_id, message_type, content_ref, null], function(insertErr) {
       if (insertErr) {
+        console.error('[Project Messages] Insert error:', insertErr.message);
         return res.status(500).json({ success: false, error: insertErr.message });
       }
+      console.log('[Project Messages] Message added successfully:', message_id);
       res.status(201).json({ 
         success: true, 
         data: { 

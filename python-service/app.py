@@ -7,6 +7,19 @@ import os
 from typing import Optional
 import tempfile
 import hashlib
+import logging
+from datetime import datetime
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('telegram_service.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Pyrogram Telegram Service", description="Internal service for handling Telegram operations")
 
@@ -103,45 +116,201 @@ async def complete_auth(request: Request):
 
 @app.post("/send_message")
 async def send_message(request: Request):
-    """Send a message to a chat"""
+    """Send a comment to a channel post (not direct message)"""
     data = await request.json()
     session_string = data.get("session_string")
-    chat_id = data.get("chat_id")
+    chat_id = data.get("chat_id")  # Channel username or ID
     message_type = data.get("message_type")
     file_path = data.get("file_path")
     caption = data.get("caption", "")
-    reply_to_message_id = data.get("reply_to_message_id")
+    
+    logger.info(f"=" * 80)
+    logger.info(f"📨 NEW REQUEST - Send Message to Channel")
+    logger.info(f"Channel: {chat_id}")
+    logger.info(f"Type: {message_type}")
+    logger.info(f"File: {file_path}")
+    logger.info(f"Caption length: {len(caption) if caption else 0} chars")
+    logger.info(f"=" * 80)
+    
+    # Validate required parameters
+    if not session_string:
+        logger.error("❌ Missing session_string")
+        raise HTTPException(status_code=400, detail="session_string is required")
+    
+    if not chat_id:
+        logger.error("❌ Missing chat_id")
+        raise HTTPException(status_code=400, detail="chat_id is required")
     
     try:
         # Create a client with the session string
+        logger.info(f"🔐 Creating Pyrogram client...")
         client = Client("temp_client", session_string=session_string)
-        await client.start()
         
+        logger.info(f"🚀 Starting client...")
+        await client.start()
+        logger.info(f"✅ Client started successfully")
+        
+        # Text content to send and check for duplicates
+        reply_text = caption if caption else ""
+        logger.info(f"📝 Reply text: {reply_text[:50]}..." if len(reply_text) > 50 else f"📝 Reply text: {reply_text}")
+        
+        # Step 1: Check for duplicate comments and find a message to comment on
+        message_id_to_comment = None
+        comment_found = False
+        
+        logger.info(f"🔍 STEP 1: Checking for duplicates in last 30 messages...")
+        # Get recent channel history (last 30 messages)
+        message_count = 0
+        async for message in client.get_chat_history(chat_id=chat_id, limit=30):
+            message_count += 1
+            message_id = message.id
+            logger.info(f"  📄 Checking message {message_count}/30 (ID: {message_id})")
+            
+            comment_count = None  # Initialize outside try block
+            try:
+                # Check existing comments on this message
+                comment_count = 0
+                logger.info(f"    💬 Getting discussion replies for message {message_id}...")
+                
+                async for comment in client.get_discussion_replies(chat_id=chat_id, message_id=message_id, limit=10):
+                    comment_count += 1
+                    comment_text = comment.text if comment.text else comment.caption
+                    
+                    if comment_text:
+                        comment_text_lower = comment_text.strip().lower()
+                        reply_text_lower = reply_text.strip().lower()
+                        
+                        logger.info(f"      🔍 Comment {comment_count}: {comment_text[:30]}...")
+                        
+                        # Check if similar comment already exists (case-insensitive)
+                        if reply_text_lower and reply_text_lower in comment_text_lower:
+                            comment_found = True
+                            logger.warning(f"      ⚠️ DUPLICATE FOUND! Comment matches our text")
+                            logger.warning(f"      Existing: {comment_text[:50]}...")
+                            logger.warning(f"      Our text: {reply_text[:50]}...")
+                            break
+                
+                logger.info(f"    ✅ Checked {comment_count} comments on message {message_id}")
+                
+                # If no duplicate found and comments are enabled, use this message
+                if not comment_found and comment_count is not None and comment_count >= 0:
+                    message_id_to_comment = message_id
+                    logger.info(f"    ✅ Message {message_id} is suitable for commenting (no duplicates)")
+                    break
+                    
+            except Exception as e:
+                # If get_discussion_replies fails, comments might be disabled
+                logger.error(f"    ❌ Cannot check comments on message {message_id}: {str(e)}")
+                logger.error(f"    Reason: {type(e).__name__}")
+                continue
+        
+        logger.info(f"📊 Checked {message_count} messages total")
+        
+        # If duplicate found, return without sending
+        if comment_found:
+            logger.warning(f"⏭️ SKIPPING: Duplicate comment detected")
+            await client.stop()
+            return {
+                "success": True,
+                "skipped": True,
+                "reason": "Duplicate comment detected",
+                "data": {
+                    "message_id": None,
+                    "chat_id": chat_id,
+                    "date": None
+                }
+            }
+        
+        # If no suitable message found
+        if not message_id_to_comment:
+            logger.error(f"❌ No suitable message found to comment on")
+            logger.error(f"Possible reasons:")
+            logger.error(f"  - Comments are disabled on channel")
+            logger.error(f"  - No messages in channel")
+            logger.error(f"  - All messages already have duplicate comments")
+            await client.stop()
+            raise HTTPException(status_code=400, detail="No suitable message found to comment on or comments are disabled")
+        
+        logger.info(f"🎯 STEP 2: Getting discussion message for ID {message_id_to_comment}...")
+        # Step 2: Get discussion message
+        discussion_message = await client.get_discussion_message(chat_id=chat_id, message_id=message_id_to_comment)
+        logger.info(f"✅ Discussion message retrieved")
+        
+        logger.info(f"📤 STEP 3: Sending comment...")
+        # Step 3: Send comment based on file type
         result = None
         
-        if message_type == "text":
-            if reply_to_message_id:
-                result = await client.reply_text(chat_id, text=caption, message_id=reply_to_message_id)
-            else:
-                result = await client.send_message(chat_id, text=caption or file_path)
-        elif message_type == "photo":
-            result = await client.send_photo(chat_id, photo=file_path, caption=caption)
-        elif message_type == "video":
-            result = await client.send_video(chat_id, video=file_path, caption=caption)
+        if file_path and message_type in ["photo", "video"]:
+            import os
+            ext = os.path.splitext(file_path)[1].lower()
+            logger.info(f"  📸 Sending media comment: {message_type} ({ext})")
+            logger.info(f"  File path: {file_path}")
+            
+            try:
+                if message_type == "photo" or ext in [".png", ".jpg", ".jpeg", ".gif"]:
+                    logger.info(f"  🖼️ Sending as photo...")
+                    result = await discussion_message.reply_photo(photo=file_path, caption=reply_text)
+                    logger.info(f"  ✅ Photo sent successfully!")
+                elif message_type == "video" or ext in [".mp4", ".mov", ".avi", ".mkv"]:
+                    logger.info(f"  🎥 Sending as video...")
+                    result = await discussion_message.reply_video(video=file_path, caption=reply_text)
+                    logger.info(f"  ✅ Video sent successfully!")
+                else:
+                    # Fallback to text if file type not recognized
+                    logger.warning(f"  ⚠️ Unknown file type, sending as text")
+                    from pyrogram.enums import ParseMode
+                    result = await discussion_message.reply(reply_text, parse_mode=ParseMode.MARKDOWN)
+                    logger.info(f"  ✅ Text sent successfully!")
+            except Exception as e:
+                # If media fails, send as text
+                logger.error(f"  ❌ Failed to send media: {str(e)}")
+                logger.error(f"  Error type: {type(e).__name__}")
+                logger.warning(f"  🔄 Falling back to text-only...")
+                from pyrogram.enums import ParseMode
+                result = await discussion_message.reply(reply_text, parse_mode=ParseMode.MARKDOWN)
+                logger.info(f"  ✅ Text fallback sent successfully!")
         else:
-            raise HTTPException(status_code=400, detail=f"Unsupported message type: {message_type}")
+            # Text only
+            logger.info(f"  📝 Sending text-only comment...")
+            from pyrogram.enums import ParseMode
+            result = await discussion_message.reply(reply_text, parse_mode=ParseMode.MARKDOWN)
+            logger.info(f"  ✅ Text sent successfully!")
         
+        logger.info(f"🛑 Stopping client...")
         await client.stop()
+        logger.info(f"✅ Client stopped")
+        
+        logger.info(f"=" * 80)
+        logger.info(f"✅ SUCCESS - Comment sent to {chat_id}")
+        logger.info(f"Message ID: {result.id}")
+        logger.info(f"Parent Message ID: {message_id_to_comment}")
+        logger.info(f"=" * 80)
         
         return {
             "success": True,
+            "skipped": False,
             "data": {
                 "message_id": result.id,
                 "chat_id": result.chat.id,
-                "date": result.date.isoformat() if result.date else None
+                "date": result.date.isoformat() if result.date else None,
+                "parent_message_id": message_id_to_comment
             }
         }
+    except HTTPException as he:
+        logger.error(f"=" * 80)
+        logger.error(f"❌ HTTP EXCEPTION")
+        logger.error(f"Status: {he.status_code}")
+        logger.error(f"Detail: {he.detail}")
+        logger.error(f"=" * 80)
+        raise he
     except Exception as e:
+        logger.error(f"=" * 80)
+        logger.error(f"❌ UNEXPECTED ERROR")
+        logger.error(f"Error type: {type(e).__name__}")
+        logger.error(f"Error message: {str(e)}")
+        logger.error(f"Channel: {chat_id}")
+        logger.error(f"Message type: {message_type}")
+        logger.error(f"=" * 80)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/get_chat")
@@ -300,6 +469,7 @@ async def register_session_string(request: Request):
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
+    logger.info("Health check called")
     return {"status": "healthy", "service": "python-pyrogram-service"}
 
 if __name__ == "__main__":

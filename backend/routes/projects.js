@@ -146,6 +146,14 @@ router.post('/:id/run', async (req, res) => {
                 return res.status(400).json({ success: false, error: 'No sessions found for this project' });
               }
               
+              if (targets.length === 0) {
+                return res.status(400).json({ success: false, error: 'No target channels found for this project' });
+              }
+              
+              if (messages.length === 0) {
+                return res.status(400).json({ success: false, error: 'No messages found for this project. Please add at least one file (text or media).' });
+              }
+              
               const sessionId = sessions[0].session_id; // Always use first (and only) session
               
               // Determine message structure: text only, media only, or media + caption
@@ -205,6 +213,24 @@ router.post('/:id/run', async (req, res) => {
                   console.error('Error adding job to queue:', jobErr);
                 }
               }
+              
+              // Initialize stats with total jobs count
+              const initStatsSql = `
+                UPDATE process_runs 
+                SET stats = json_set(
+                  coalesce(stats, '{}'), 
+                  '$.total_jobs', ?,
+                  '$.completed_jobs', 0,
+                  '$.success_count', 0,
+                  '$.error_count', 0
+                )
+                WHERE id = ?
+              `;
+              db.run(initStatsSql, [jobCount, runId], (statsErr) => {
+                if (statsErr) {
+                  console.error('Error initializing stats:', statsErr);
+                }
+              });
               
               res.json({ 
                 success: true, 

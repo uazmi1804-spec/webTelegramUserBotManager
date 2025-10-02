@@ -13,8 +13,9 @@ const projectSessionsRoutes = require('./routes/projectSessions');
 const projectMessagesRoutes = require('./routes/projectMessages');
 const delaysRoutes = require('./routes/delays');
 const internalRoutes = require('./routes/internal');
+const dashboardRoutes = require('./routes/dashboard');
 const db = require('./db');
-const { worker } = require('./queue');
+const { worker, checkAndUpdateProjectStatus } = require('./queue');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -40,6 +41,7 @@ app.use('/api/project-sessions', projectSessionsRoutes);
 app.use('/api/project-targets', projectTargetsRoutes);
 app.use('/api/project-messages', projectMessagesRoutes);
 app.use('/internal', internalRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -49,12 +51,63 @@ app.get('/health', (req, res) => {
 // Initialize database
 db.initDB();
 
-// Ensure worker is running
-worker.on('completed', (job) => {
-  console.log(`Job ${job.id} completed`);
+// Ensure worker is running and track job completion
+worker.on('completed', async (job) => {
+  console.log(`Job ${job.id} completed successfully`);
+  
+  // Increment completed_jobs counter
+  const { run_id, project_id } = job.data;
+  if (run_id && project_id) {
+    const updateSql = `
+      UPDATE process_runs 
+      SET stats = json_set(
+        coalesce(stats, '{}'), 
+        '$.completed_jobs',
+        coalesce(json_extract(stats, '$.completed_jobs'), 0) + 1
+      )
+      WHERE id = ?
+    `;
+    
+    db.db.run(updateSql, [run_id], async (err) => {
+      if (err) {
+        console.error('Error updating completed_jobs:', err);
+      } else {
+        // Check if all jobs are complete
+        await checkAndUpdateProjectStatus(run_id, project_id);
+      }
+    });
+  }
 });
-worker.on('failed', (job, err) => {
+
+worker.on('failed', async (job, err) => {
   console.log(`Job ${job.id} failed with error: ${err.message}`);
+  
+  // Also increment completed_jobs on final failure (after all retries exhausted)
+  if (job.attemptsMade >= job.opts.attempts) {
+    console.log(`Job ${job.id} exhausted all retries, marking as completed`);
+    
+    const { run_id, project_id } = job.data;
+    if (run_id && project_id) {
+      const updateSql = `
+        UPDATE process_runs 
+        SET stats = json_set(
+          coalesce(stats, '{}'), 
+          '$.completed_jobs',
+          coalesce(json_extract(stats, '$.completed_jobs'), 0) + 1
+        )
+        WHERE id = ?
+      `;
+      
+      db.db.run(updateSql, [run_id], async (updateErr) => {
+        if (updateErr) {
+          console.error('Error updating completed_jobs on failure:', updateErr);
+        } else {
+          // Check if all jobs are complete
+          await checkAndUpdateProjectStatus(run_id, project_id);
+        }
+      });
+    }
+  }
 });
 
 // Start server
