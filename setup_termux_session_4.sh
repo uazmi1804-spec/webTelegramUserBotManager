@@ -1,8 +1,15 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Setup Redis Server di Termux
+# Setup Frontend React/Next.js di Termux
 
 pkg update -y && pkg upgrade -y
-pkg install -y redis
+pkg install -y nodejs git
 
-# Jalankan redis-server di port 6379
-redis-server --port 6379
+cd ~/webTelegramUserBotManager
+
+# Install dependency frontend jika belum
+if [ ! -d "node_modules" ]; then
+  npm install
+fi
+
+# Jalankan frontend di port 3001
+npm run dev:frontend -- --port 3001

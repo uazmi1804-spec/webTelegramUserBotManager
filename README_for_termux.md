@@ -1,4 +1,3 @@
-
 # 📌 WebTelegramUserBotManager on Termux
 
 Panduan instalasi dan menjalankan **WebTelegramUserBotManager** di **Termux** dengan memisahkan service ke dalam 4 session berbeda (Frontend, Backend, Python Service, dan Redis).
@@ -33,37 +32,22 @@ chmod +x setup_termux_session_4.sh
 
 > ⚠️  **Wajib buka 4 session berbeda di Termux** , karena setiap service jalan di port masing-masing.
 
-### ✅ Session 1: Frontend (React/Next.js, Port 3001)
+### ✅ Session 1: Redis Server (Port 6379)
 
 ```bash
 cd ~/webTelegramUserBotManager
 bash setup_termux_session_1.sh
 ```
 
-Akses via browser di:
-
-👉 [http://localhost:3001](http://localhost:3001/)
+Redis akan berjalan di port  **6379** .
 
 ---
 
-### ✅ Session 2: Backend (Node.js/Express.js, Port 3000)
+### ✅ Session 2: Python Service (Port 5000)
 
 ```bash
 cd ~/webTelegramUserBotManager
 bash setup_termux_session_2.sh
-```
-
-API jalan di:
-
-👉 [http://localhost:3000](http://localhost:3000/)
-
----
-
-### ✅ Session 3: Python Service (Port 5000)
-
-```bash
-cd ~/webTelegramUserBotManager
-bash setup_termux_session_3.sh
 ```
 
 Service jalan di:
@@ -72,14 +56,29 @@ Service jalan di:
 
 ---
 
-### ✅ Session 4: Redis Server (Port 6379)
+### ✅ Session 3: Backend (Node.js/Express.js, Port 3000)
+
+```bash
+cd ~/webTelegramUserBotManager
+bash setup_termux_session_3.sh
+```
+
+API jalan di:
+
+👉 [http://localhost:3000](http://localhost:3000/)
+
+---
+
+### ✅ Session 4: Frontend (React/Next.js, Port 3001)
 
 ```bash
 cd ~/webTelegramUserBotManager
 bash setup_termux_session_4.sh
 ```
 
-Redis akan berjalan di port  **6379** .
+Akses via browser di:
+
+👉 [http://localhost:3001](http://localhost:3001/)
 
 ---
 

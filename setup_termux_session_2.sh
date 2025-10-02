@@ -1,15 +1,15 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Setup Backend Node.js/Express.js di Termux
+# Setup Python Service di Termux
 
 pkg update -y && pkg upgrade -y
-pkg install -y nodejs git
+pkg install -y python git
 
 cd ~/webTelegramUserBotManager
 
-# Install dependency backend jika belum
-if [ ! -d "node_modules" ]; then
-  npm install
+# Install requirements jika ada
+if [ -f "requirements.txt" ]; then
+  pip install -r requirements.txt
 fi
 
-# Jalankan backend di port 3000
-npm run dev:backend -- --port 3000
+# Jalankan python service di port 5000
+npm run dev:python -- --port 5000

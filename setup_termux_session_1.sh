@@ -1,15 +1,14 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Setup Frontend React/Next.js di Termux
+# Setup Redis Server di Termux
 
+# Update & upgrade
 pkg update -y && pkg upgrade -y
-pkg install -y nodejs git
 
-cd ~/webTelegramUserBotManager
+# Install Redis
+pkg install -y redis
 
-# Install dependency frontend jika belum
-if [ ! -d "node_modules" ]; then
-  npm install
-fi
+# Buat config untuk bypass ARM64-COW-BUG
+echo "ignore-warnings ARM64-COW-BUG" > ~/redis.conf
 
-# Jalankan frontend di port 3001
-npm run dev:frontend -- --port 3001
+# Jalankan redis-server di port 6379
+redis-server ~/redis.conf --port 6379
